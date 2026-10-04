@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Tic-Tac-Toe Modern</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --accent-x: #38bdf8;
+            --accent-o: #fb7185;
+            --win-line: #4ade80;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            touch-action: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #game-container {
+            width: 100%;
+            max-width: 450px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .screen {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        .screen.active { display: flex; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* UI Elements */
+        h1 { font-size: 2.5rem; margin-bottom: 10px; color: var(--accent-x); }
+        
+        .scoreboard {
+            display: flex;
+            justify-content: space-around;
+            width: 100%;
+            background: var(--card-bg);
+            padding: 15px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+        }
+
+        .score-item span { display: block; font-size: 0.8rem; opacity: 0.7; }
+        .score-item b { font-size: 1.5rem; }
+
+        /* Canvas Game Area */
+        canvas {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            max-width: 100%;
+            cursor: pointer;
+        }
+
+        /* Buttons */
+        .btn {
+            background: var(--accent-x);
+            color: var(--bg-color);
+            border: none;
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.2s;
+        }
+
+        .btn:active { transform: scale(0.95); opacity: 0.9; }
+
+        .game-over-text { font-size: 2rem; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="screen-start" class="screen active">
+            <h1>TIC TAC TOE</h1>
+            <p>Reto contra la CPU</p>
+            <button class="btn" onclick="game.start()">JUGAR</button>
+        </div>
+
+        <div id="screen-game" class="screen">
+            <div class="scoreboard">
+                <div class="score-item"><span>TÚ (X)</span><b id="score-player">0</b></div>
+                <div class="score-item"><span>CPU (O)</span><b id="score-cpu">0</b></div>
+            </div>
+            <canvas id="gameCanvas" width="300" height="300"></canvas>
+            <p id="turn-indicator">Tu turno</p>
+        </div>
+
+        <div id="screen-result" class="screen">
+            <div id="result-msg" class="game-over-text">¡GANASTE!</div>
+            <button class="btn" onclick="game.reset()">REINTENTAR</button>
+        </div>
+    </div>
+
+<script>
+/**
+ * AUDIO ENGINE (Web Audio API)
+ */
+const audio = {
+    ctx: null,
+    init() { if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)(); },
+    play(freq, type = 'sine', duration = 0.1) {
+        this.init();
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+        gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, this.ctx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start();
+        osc.stop(this.ctx.currentTime + duration);
+    }
+};
+
+/**
+ * GAME CORE
+ */
+const game = {
+    canvas: document.getElementById('gameCanvas'),
+    ctx: null,
+    size: 300,
+    cellSize: 100,
+    board: Array(9).fill(null),
+    playing: false,
+    scores: { player: 0, cpu: 0 },
+    winnerLine: null,
+
+    init() {
+        this.ctx = this.canvas.getContext('2d');
+        this.canvas.addEventListener('touchstart', (e) => this.handleInput(e), { passive: false });
+        this.canvas.addEventListener('mousedown', (e) => this.handleInput(e));
+        this.renderLoop();
+    },
+
+    start() {
+        this.switchScreen('screen-game');
+        this.resetBoard();
+    },
+
+    reset() {
+        this.resetBoard();
+        this.switchScreen('screen-game');
+    },
+
+    resetBoard() {
+        this.board = Array(9).fill(null);
+        this.playing = true;
+        this.winnerLine = null;
+        document.getElementById('turn-indicator').innerText = "Tu turno";
+    },
+
+    switchScreen(id) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+    },
+
+    handleInput(e) {
+        if (!this.playing) return;
+        e.preventDefault();
+        
+        const rect = this.canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        
+        const col = Math.floor(x / (rect.width / 3));
+        const row = Math.floor(y / (rect.height / 3));
+        const index = row * 3 + col;
+
+        if (this.board[index] === null) {
+            this.makeMove(index, 'X');
+            if (this.playing) {
+                setTimeout(() => this.cpuMove(), 500);
+            }
+        }
+    },
+
+    makeMove(index, player) {
+        this.board[index] = player;
+        audio.play(player === 'X' ? 440 : 330, 'triangle');
+        this.checkGameStatus();
+    },
+
+    cpuMove() {
+        if (!this.playing) return;
+        
+        // IA Básica: 1. Ganar si puede, 2. Bloquear si va a perder, 3. Aleatorio
+        const bestMove = this.findBestMove();
+        this.makeMove(bestMove, 'O');
+    },
+
+    findBestMove() {
+        const winPatterns = [
+            [0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6]
+        ];
+        
+        const check = (p) => {
+            for (let pattern of winPatterns) {
+                const vals = pattern.map(i => this.board[i]);
+                if (vals.filter(v => v === p).length === 2 && vals.includes(null)) {
+                    return pattern[vals.indexOf(null)];
+                }
+            }
+            return null;
+        };
+
+        const win = check('O');
+        if (win !== null) return win;
+        const block = check('X');
+        if (block !== null) return block;
+
+        const available = this.board.map((v, i) => v === null ? i : null).filter(v => v !== null);
+        return available[Math.floor(Math.random() * available.length)];
+    },
+
+    checkGameStatus() {
+        const winPatterns = [
+            [0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6]
+        ];
+
+        for (let p of winPatterns) {
+            if (this.board[p[0]] && this.board[p[0]] === this.board[p[1]] && this.board[p[0]] === this.board[p[2]]) {
+                this.endGame(this.board[p[0]], p);
+                return;
+            }
+        }
+
+        if (!this.board.includes(null)) this.endGame('draw');
+    },
+
+    endGame(winner, pattern = null) {
+        this.playing = false;
+        this.winnerLine = pattern;
+        
+        if (winner === 'X') {
+            this.scores.player++;
+            document.getElementById('result-msg').innerText = "¡GANASTE!";
+            audio.play(880, 'sine', 0.3);
+        } else if (winner === 'O') {
+            this.scores.cpu++;
+            document.getElementById('result-msg').innerText = "CPU GANA";
+            audio.play(110, 'sawtooth', 0.3);
+        } else {
+            document.getElementById('result-msg').innerText = "EMPATE";
+        }
+
+        document.getElementById('score-player').innerText = this.scores.player;
+        document.getElementById('score-cpu').innerText = this.scores.cpu;
+
+        setTimeout(() => this.switchScreen('screen-result'), 1000);
+    },
+
+    drawBoard() {
+        this.ctx.clearRect(0, 0, this.size, this.size);
+        this.ctx.strokeStyle = '#475569';
+        this.ctx.lineWidth = 4;
+        this.ctx.lineCap = 'round';
+
+        // Grid
+        for (let i = 1; i < 3; i++) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(i * this.cellSize, 20);
+            this.ctx.lineTo(i * this.cellSize, this.size - 20);
+            this.ctx.stroke();
+            this.ctx.beginPath();
+            this.ctx.moveTo(20, i * this.cellSize);
+            this.ctx.lineTo(this.size - 20, i * this.cellSize);
+            this.ctx.stroke();
+        }
+
+        // Symbols
+        this.board.forEach((val, i) => {
+            if (!val) return;
+            const x = (i % 3) * this.cellSize + 50;
+            const y = Math.floor(i / 3) * this.cellSize + 50;
+            
+            this.ctx.lineWidth = 8;
+            if (val === 'X') {
+                this.ctx.strokeStyle = '#38bdf8';
+                this.ctx.beginPath();
+                this.ctx.moveTo(x - 25, y - 25); this.ctx.lineTo(x + 25, y + 25);
+                this.ctx.moveTo(x + 25, y - 25); this.ctx.lineTo(x - 25, y + 25);
+                this.ctx.stroke();
+            } else {
+                this.ctx.strokeStyle = '#fb7185';
+                this.ctx.beginPath();
+                this.ctx.arc(x, y, 25, 0, Math.PI * 2);
+                this.ctx.stroke();
+            }
+        });
+
+        // Win line
+        if (this.winnerLine) {
+            const start = this.winnerLine[0];
+            const end = this.winnerLine[2];
+            this.ctx.strokeStyle = '#4ade80';
+            this.ctx.lineWidth = 10;
+            this.ctx.beginPath();
+            this.ctx.moveTo((start % 3) * 100 + 50, Math.floor(start / 3) * 100 + 50);
+            this.ctx.lineTo((end % 3) * 100 + 50, Math.floor(end / 3) * 100 + 50);
+            this.ctx.stroke();
+        }
+    },
+
+    renderLoop() {
+        this.drawBoard();
+        requestAnimationFrame(() => this.renderLoop());
+    }
+};
+
+// Initialize Game
+game.init();
+</script>
+</body>
+</html>

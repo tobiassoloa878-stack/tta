@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Minimalist Memory Match</title>
+    <style>
+        :root {
+            --bg-color: #f0f2f5;
+            --card-back: #1e293b;
+            --card-front: #ffffff;
+            --accent: #3b82f6;
+            --success: #10b981;
+            --text: #1e293b;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        #game-container {
+            width: 100%;
+            max-width: 500px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .stats {
+            font-weight: bold;
+            font-size: 1.1rem;
+            background: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        /* Rejilla de cartas */
+        #grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            perspective: 1000px;
+        }
+
+        .card {
+            aspect-ratio: 1 / 1;
+            position: relative;
+            transform-style: preserve-3d;
+            transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+        }
+
+        .card.flipped {
+            transform: rotateY(180deg);
+        }
+
+        .card.matched {
+            animation: pulse 0.5s ease-in-out;
+            opacity: 0.7;
+        }
+
+        @keyframes pulse {
+            0% { transform: rotateY(180deg) scale(1); }
+            50% { transform: rotateY(180deg) scale(1.05); }
+            100% { transform: rotateY(180deg) scale(1); }
+        }
+
+        .card-face {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            backface-visibility: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border-radius: 12px;
+            font-size: 2rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .card-back {
+            background-color: var(--card-back);
+            color: white;
+        }
+
+        .card-back::after {
+            content: '?';
+            font-weight: bold;
+            opacity: 0.2;
+            font-size: 1.5rem;
+        }
+
+        .card-front {
+            background-color: var(--card-front);
+            transform: rotateY(180deg);
+        }
+
+        /* Pantallas */
+        .modal {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            color: white;
+            text-align: center;
+        }
+
+        .modal.active { display: flex; }
+
+        .btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 50px;
+            margin-top: 20px;
+            cursor: pointer;
+            transition: transform 0.1s;
+        }
+
+        .btn:active { transform: scale(0.95); }
+
+        /* Símbolos por CSS */
+        .icon { width: 60%; height: 60%; border-radius: 50%; }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <header>
+            <div class="stats">Movimientos: <span id="moves">0</span></div>
+            <div class="stats">Pares: <span id="matches">0</span>/8</div>
+        </header>
+
+        <div id="grid"></div>
+    </div>
+
+    <div id="modal-win" class="modal">
+        <h1>¡Excelente Memoria!</h1>
+        <p id="final-stats"></p>
+        <button class="btn" onclick="game.init()">Jugar de nuevo</button>
+    </div>
+
+<script>
+/**
+ * AUDIO ENGINE
+ */
+const audio = {
+    ctx: null,
+    play(freq, type = 'sine', duration = 0.1) {
+        if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+        g.gain.setValueAtTime(0.1, this.ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+        osc.connect(g); g.connect(this.ctx.destination);
+        osc.start(); osc.stop(this.ctx.currentTime + duration);
+    }
+};
+
+/**
+ * GAME ENGINE
+ */
+const game = {
+    icons: ['🍎', '🚀', '⭐', '💎', '👻', '🍕', '🌈', '🎮'],
+    cards: [],
+    flipped: [],
+    moves: 0,
+    matches: 0,
+    lock: false,
+
+    init() {
+        document.getElementById('modal-win').classList.remove('active');
+        this.moves = 0;
+        this.matches = 0;
+        this.flipped = [];
+        this.lock = false;
+        this.updateUI();
+        
+        // Crear mazo duplicado y barajar
+        this.cards = [...this.icons, ...this.icons];
+        this.shuffle(this.cards);
+        
+        this.render();
+    },
+
+    shuffle(array) {
+        for (let i = array.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [array[i], array[j]] = [array[j], array[i]];
+        }
+    },
+
+    render() {
+        const grid = document.getElementById('grid');
+        grid.innerHTML = '';
+        
+        this.cards.forEach((icon, index) => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.dataset.icon = icon;
+            card.dataset.index = index;
+            
+            card.innerHTML = `
+                <div class="card-face card-back"></div>
+                <div class="card-face card-front">${icon}</div>
+            `;
+            
+            card.addEventListener('click', () => this.flip(card));
+            card.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                this.flip(card);
+            });
+            
+            grid.appendChild(card);
+        });
+    },
+
+    flip(card) {
+        if (this.lock || card.classList.contains('flipped') || card.classList.contains('matched')) return;
+
+        audio.play(400, 'triangle', 0.05);
+        card.classList.add('flipped');
+        this.flipped.push(card);
+
+        if (this.flipped.length === 2) {
+            this.moves++;
+            this.updateUI();
+            this.checkMatch();
+        }
+    },
+
+    checkMatch() {
+        this.lock = true;
+        const [c1, c2] = this.flipped;
+        const isMatch = c1.dataset.icon === c2.dataset.icon;
+
+        if (isMatch) {
+            this.matches++;
+            setTimeout(() => {
+                c1.classList.add('matched');
+                c2.classList.add('matched');
+                audio.play(800, 'sine', 0.2);
+                this.flipped = [];
+                this.lock = false;
+                this.updateUI();
+                if (this.matches === 8) this.win();
+            }, 500);
+        } else {
+            setTimeout(() => {
+                c1.classList.remove('flipped');
+                c2.classList.remove('flipped');
+                audio.play(200, 'square', 0.1);
+                this.flipped = [];
+                this.lock = false;
+            }, 1000);
+        }
+    },
+
+    updateUI() {
+        document.getElementById('moves').innerText = this.moves;
+        document.getElementById('matches').innerText = this.matches;
+    },
+
+    win() {
+        setTimeout(() => {
+            document.getElementById('final-stats').innerText = `Completado en ${this.moves} movimientos`;
+            document.getElementById('modal-win').classList.add('active');
+            audio.play(500, 'sine', 0.4);
+            setTimeout(() => audio.play(650, 'sine', 0.4), 150);
+        }, 600);
+    }
+};
+
+// Iniciar al cargar
+game.init();
+</script>
+</body>
+</html>

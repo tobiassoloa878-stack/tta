@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Retro Pong Pro</title>
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --primary: #00ff41; /* Classic Terminal Green */
+            --text: #ffffff;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            touch-action: none;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #ui-layer {
+            position: absolute;
+            width: 100%;
+            max-width: 600px;
+            text-align: center;
+            pointer-events: none;
+        }
+
+        .screen {
+            display: none;
+            pointer-events: auto;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .screen.active { display: flex; }
+
+        canvas {
+            border: 4px solid #333;
+            background: #000;
+            max-width: 95vw;
+            max-height: 80vh;
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
+        }
+
+        .btn {
+            background: transparent;
+            color: var(--primary);
+            border: 2px solid var(--primary);
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            text-transform: uppercase;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            background: var(--primary);
+            color: #000;
+        }
+
+        .score-board {
+            position: absolute;
+            top: -60px;
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            font-size: 2rem;
+            color: var(--primary);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="screen-start" class="screen active">
+            <h1 style="color: var(--primary); font-size: 3rem;">PING PONG</h1>
+            <button class="btn" onclick="game.start()">Iniciar Partida</button>
+        </div>
+
+        <div id="screen-game" class="screen">
+            <div class="score-board">
+                <span id="score-p1">0</span>
+                <span id="score-cpu">0</span>
+            </div>
+            <canvas id="pongCanvas"></canvas>
+        </div>
+
+        <div id="screen-over" class="screen">
+            <h2 id="winner-text">GAME OVER</h2>
+            <button class="btn" onclick="game.start()">Revancha</button>
+        </div>
+    </div>
+
+<script>
+/**
+ * AUDIO ENGINE
+ */
+const sfx = {
+    ctx: null,
+    play(freq, type = 'square', time = 0.1) {
+        if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+        g.gain.setValueAtTime(0.1, this.ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + time);
+        osc.connect(g);
+        g.connect(this.ctx.destination);
+        osc.start();
+        osc.stop(this.ctx.currentTime + time);
+    }
+};
+
+/**
+ * PONG LOGIC
+ */
+const game = {
+    canvas: document.getElementById('pongCanvas'),
+    ctx: null,
+    width: 600,
+    height: 400,
+    
+    ball: { x: 300, y: 200, r: 8, dx: 4, dy: 4, speed: 5 },
+    p1: { y: 150, w: 12, h: 80, score: 0 },
+    cpu: { y: 150, w: 12, h: 80, score: 0, speed: 3.5 },
+    
+    init() {
+        this.ctx = this.canvas.getContext('2d');
+        this.canvas.width = this.width;
+        this.canvas.height = this.height;
+        
+        // Controles táctiles y mouse
+        const move = (e) => {
+            const rect = this.canvas.getBoundingClientRect();
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const scaleY = this.height / rect.height;
+            this.p1.y = (clientY - rect.top) * scaleY - this.p1.h / 2;
+        };
+        
+        window.addEventListener('mousemove', move);
+        window.addEventListener('touchmove', (e) => { e.preventDefault(); move(e); }, { passive: false });
+        
+        this.loop();
+    },
+
+    start() {
+        this.p1.score = 0;
+        this.cpu.score = 0;
+        this.resetBall();
+        this.switchScreen('screen-game');
+    },
+
+    resetBall() {
+        this.ball.x = this.width / 2;
+        this.ball.y = this.height / 2;
+        this.ball.speed = 5;
+        this.ball.dx = (Math.random() > 0.5 ? 1 : -1) * this.ball.speed;
+        this.ball.dy = (Math.random() * 2 - 1) * this.ball.speed;
+        this.updateScores();
+    },
+
+    updateScores() {
+        document.getElementById('score-p1').innerText = this.p1.score;
+        document.getElementById('score-cpu').innerText = this.cpu.score;
+    },
+
+    switchScreen(id) {
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+    },
+
+    update() {
+        // Mover bola
+        this.ball.x += this.ball.dx;
+        this.ball.y += this.ball.dy;
+
+        // IA Simple pero efectiva
+        let cpuTarget = this.ball.y - (this.cpu.h / 2);
+        this.cpu.y += (cpuTarget - this.cpu.y) * 0.12;
+
+        // Colisión techo/suelo
+        if (this.ball.y - this.ball.r < 0 || this.ball.y + this.ball.r > this.height) {
+            this.ball.dy *= -1;
+            sfx.play(200);
+        }
+
+        // Colisión Paletas
+        let player = (this.ball.x < this.width / 2) ? this.p1 : this.cpu;
+        if (this.checkCollision(this.ball, player)) {
+            // Calcular ángulo de rebote según dónde golpea la paleta
+            let collidePoint = (this.ball.y - (player.y + player.h / 2));
+            collidePoint = collidePoint / (player.h / 2);
+            let angleRad = (Math.PI / 4) * collidePoint;
+            
+            let direction = (this.ball.x < this.width / 2) ? 1 : -1;
+            this.ball.dx = direction * this.ball.speed * Math.cos(angleRad);
+            this.ball.dy = this.ball.speed * Math.sin(angleRad);
+            
+            this.ball.speed += 0.2; // Aumentar dificultad
+            sfx.play(400);
+        }
+
+        // Puntos
+        if (this.ball.x - this.ball.r < 0) {
+            this.cpu.score++;
+            sfx.play(100, 'sawtooth', 0.5);
+            this.checkWin();
+        } else if (this.ball.x + this.ball.r > this.width) {
+            this.p1.score++;
+            sfx.play(600, 'sine', 0.5);
+            this.checkWin();
+        }
+    },
+
+    checkCollision(b, p) {
+        let p_top = p.y;
+        let p_bottom = p.y + p.h;
+        let p_left = (p === this.p1) ? 0 : this.width - p.w;
+        let p_right = (p === this.p1) ? p.w : this.width;
+
+        let b_top = b.y - b.r;
+        let b_bottom = b.y + b.r;
+        let b_left = b.x - b.r;
+        let b_right = b.x + b.r;
+
+        return b_right > p_left && b_top < p_bottom && b_left < p_right && b_bottom > p_top;
+    },
+
+    checkWin() {
+        if (this.p1.score >= 5 || this.cpu.score >= 5) {
+            document.getElementById('winner-text').innerText = this.p1.score >= 5 ? "¡GANASTE!" : "DERROTA";
+            this.switchScreen('screen-over');
+        } else {
+            this.resetBall();
+        }
+    },
+
+    draw() {
+        // Limpiar
+        this.ctx.fillStyle = "#000";
+        this.ctx.fillRect(0, 0, this.width, this.height);
+
+        // Línea central
+        this.ctx.strokeStyle = "#333";
+        this.ctx.setLineDash([10, 10]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(this.width / 2, 0);
+        this.ctx.lineTo(this.width / 2, this.height);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+
+        // Paletas
+        this.ctx.fillStyle = "#fff";
+        this.ctx.fillRect(0, this.p1.y, this.p1.w, this.p1.h);
+        this.ctx.fillRect(this.width - this.cpu.w, this.cpu.y, this.cpu.w, this.cpu.h);
+
+        // Bola
+        this.ctx.fillStyle = "#00ff41";
+        this.ctx.beginPath();
+        this.ctx.arc(this.ball.x, this.ball.y, this.ball.r, 0, Math.PI * 2);
+        this.ctx.fill();
+    },
+
+    loop() {
+        if (document.getElementById('screen-game').classList.contains('active')) {
+            this.update();
+        }
+        this.draw();
+        requestAnimationFrame(() => this.loop());
+    }
+};
+
+game.init();
+</script>
+</body>
+</html>

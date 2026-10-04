@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Galactic Invaders Pro</title>
+    <style>
+        :root {
+            --neon-blue: #00d2ff;
+            --neon-pink: #ff007f;
+            --neon-green: #39ff14;
+            --bg-space: #050505;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; touch-action: none; }
+
+        body {
+            background: var(--bg-space);
+            color: white;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #game-ui {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            max-width: 500px;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 20px;
+            font-size: 1.2rem;
+            color: var(--neon-blue);
+            z-index: 5;
+        }
+
+        canvas {
+            background: radial-gradient(circle, #1a1a1a 0%, #050505 100%);
+            border: 2px solid #333;
+            max-width: 100vw;
+            max-height: 100vh;
+            box-shadow: 0 0 20px rgba(0, 210, 255, 0.2);
+        }
+
+        .screen {
+            position: absolute;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 40px;
+            border: 1px solid var(--neon-blue);
+            border-radius: 10px;
+            display: none;
+            z-index: 10;
+        }
+
+        .screen.active { display: block; }
+
+        .btn {
+            background: transparent;
+            color: var(--neon-green);
+            border: 2px solid var(--neon-green);
+            padding: 15px 30px;
+            margin-top: 20px;
+            font-size: 1.2rem;
+            cursor: pointer;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+
+        .btn:active { transform: scale(0.95); background: var(--neon-green); color: black; }
+    </style>
+</head>
+<body>
+
+    <div id="game-ui">
+        <div>SCORE: <span id="score">0</span></div>
+        <div>LIVES: <span id="lives">3</span></div>
+    </div>
+
+    <div id="screen-start" class="screen active">
+        <h1 style="color: var(--neon-blue); margin-bottom: 20px;">GALACTIC INVADERS</h1>
+        <p>Toca los lados para moverte<br>Disparo automático activado</p>
+        <button class="btn" onclick="game.start()">DESPEGAR</button>
+    </div>
+
+    <div id="screen-over" class="screen">
+        <h2 id="over-msg" style="color: var(--neon-pink);">GAME OVER</h2>
+        <p>Puntuación final: <span id="final-score">0</span></p>
+        <button class="btn" onclick="game.start()">REINTENTAR</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+/** * AUDIO ENGINE
+ */
+const sfx = {
+    ctx: null,
+    play(f, t='square', d=0.1) {
+        if(!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+        o.type = t; o.frequency.setValueAtTime(f, this.ctx.currentTime);
+        g.gain.setValueAtTime(0.05, this.ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.0001, this.ctx.currentTime + d);
+        o.connect(g); g.connect(this.ctx.destination);
+        o.start(); o.stop(this.ctx.currentTime + d);
+    }
+};
+
+/**
+ * GAME ENGINE
+ */
+const game = {
+    canvas: document.getElementById('gameCanvas'),
+    ctx: null,
+    width: 400,
+    height: 600,
+    
+    player: { x: 180, y: 540, w: 40, h: 20, speed: 5 },
+    bullets: [],
+    invaders: [],
+    invaderBullets: [],
+    
+    score: 0,
+    lives: 3,
+    state: 'menu',
+    invaderDir: 1,
+    invaderStep: 0,
+    lastShot: 0,
+    input: 0, // -1: left, 1: right, 0: none
+
+    init() {
+        this.ctx = this.canvas.getContext('2d');
+        this.canvas.width = this.width;
+        this.canvas.height = this.height;
+        this.setupControls();
+        this.loop();
+    },
+
+    setupControls() {
+        const handleDown = (e) => {
+            const x = e.touches ? e.touches[0].clientX : e.clientX;
+            this.input = (x < window.innerWidth / 2) ? -1 : 1;
+        };
+        window.addEventListener('mousedown', handleDown);
+        window.addEventListener('touchstart', handleDown);
+        window.addEventListener('mouseup', () => this.input = 0);
+        window.addEventListener('touchend', () => this.input = 0);
+    },
+
+    start() {
+        this.score = 0;
+        this.lives = 3;
+        this.bullets = [];
+        this.invaderBullets = [];
+        this.state = 'playing';
+        this.createInvaders();
+        this.updateUI();
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    },
+
+    createInvaders() {
+        this.invaders = [];
+        for(let row=0; row<5; row++) {
+            for(let col=0; col<8; col++) {
+                this.invaders.push({
+                    x: 40 + col * 40,
+                    y: 60 + row * 30,
+                    w: 25, h: 20,
+                    points: (5 - row) * 10
+                });
+            }
+        }
+    },
+
+    update() {
+        if(this.state !== 'playing') return;
+
+        // Player Move
+        this.player.x += this.input * this.player.speed;
+        this.player.x = Math.max(0, Math.min(this.width - this.player.w, this.player.x));
+
+        // Auto Shoot
+        if(Date.now() - this.lastShot > 400) {
+            this.bullets.push({x: this.player.x + 18, y: this.player.y, speed: -7});
+            this.lastShot = Date.now();
+            sfx.play(600, 'sine', 0.05);
+        }
+
+        // Bullets Physics
+        this.bullets.forEach((b, i) => {
+            b.y += b.speed;
+            if(b.y < 0) this.bullets.splice(i, 1);
+            
+            // Hit Invader
+            this.invaders.forEach((inv, ii) => {
+                if(b.x > inv.x && b.x < inv.x + inv.w && b.y > inv.y && b.y < inv.y + inv.h) {
+                    this.score += inv.points;
+                    this.invaders.splice(ii, 1);
+                    this.bullets.splice(i, 1);
+                    this.updateUI();
+                    sfx.play(200, 'square', 0.1);
+                }
+            });
+        });
+
+        // Invader Logic
+        let moveDown = false;
+        let edge = false;
+        this.invaders.forEach(inv => {
+            inv.x += (0.5 + (40 - this.invaders.length) * 0.05) * this.invaderDir;
+            if(inv.x > this.width - inv.w || inv.x < 0) edge = true;
+        });
+
+        if(edge) {
+            this.invaderDir *= -1;
+            this.invaders.forEach(inv => inv.y += 10);
+        }
+
+        // Invader Shoots
+        if(Math.random() < 0.02 && this.invaders.length > 0) {
+            const randomInv = this.invaders[Math.floor(Math.random() * this.invaders.length)];
+            this.invaderBullets.push({x: randomInv.x + 12, y: randomInv.y, speed: 4});
+        }
+
+        this.invaderBullets.forEach((ib, i) => {
+            ib.y += ib.speed;
+            if(ib.y > this.height) this.invaderBullets.splice(i, 1);
+
+            // Hit Player
+            if(ib.x > this.player.x && ib.x < this.player.x + this.player.w && 
+               ib.y > this.player.y && ib.y < this.player.y + this.player.h) {
+                this.invaderBullets.splice(i, 1);
+                this.lives--;
+                this.updateUI();
+                sfx.play(100, 'sawtooth', 0.3);
+                if(this.lives <= 0) this.endGame("GAME OVER");
+            }
+        });
+
+        if(this.invaders.length === 0) this.endGame("VICTORIA");
+    },
+
+    updateUI() {
+        document.getElementById('score').innerText = this.score;
+        document.getElementById('lives').innerText = this.lives;
+    },
+
+    endGame(msg) {
+        this.state = 'over';
+        document.getElementById('over-msg').innerText = msg;
+        document.getElementById('final-score').innerText = this.score;
+        document.getElementById('screen-over').classList.add('active');
+    },
+
+    draw() {
+        this.ctx.clearRect(0, 0, this.width, this.height);
+
+        // Player
+        this.ctx.fillStyle = '#00d2ff';
+        this.ctx.fillRect(this.player.x, this.player.y, this.player.w, this.player.h);
+        this.ctx.fillRect(this.player.x + 15, this.player.y - 10, 10, 10);
+
+        // Invaders
+        this.ctx.fillStyle = '#ff007f';
+        this.invaders.forEach(inv => {
+            this.ctx.fillRect(inv.x, inv.y, inv.w, inv.h);
+            this.ctx.fillStyle = 'white';
+            this.ctx.fillRect(inv.x + 5, inv.y + 5, 4, 4);
+            this.ctx.fillRect(inv.x + 16, inv.y + 5, 4, 4);
+            this.ctx.fillStyle = '#ff007f';
+        });
+
+        // Bullets
+        this.ctx.fillStyle = '#39ff14';
+        this.bullets.forEach(b => this.ctx.fillRect(b.x, b.y, 4, 12));
+        
+        this.ctx.fillStyle = '#ff4d4d';
+        this.invaderBullets.forEach(ib => this.ctx.fillRect(ib.x, ib.y, 4, 12));
+    },
+
+    loop() {
+        this.update();
+        this.draw();
+        requestAnimationFrame(() => this.loop());
+    }
+};
+
+game.init();
+</script>
+</body>
+</html>

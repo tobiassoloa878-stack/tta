@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Retro Racer Pro</title>
+    <style>
+        body { margin: 0; background: #222; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: sans-serif; touch-action: none; }
+        #gameCanvas { background: #333; border: 4px solid #555; max-width: 100vw; max-height: 100vh; }
+        .ui { position: absolute; top: 20px; color: white; font-size: 24px; pointer-events: none; }
+        #startBtn { position: absolute; padding: 20px 40px; font-size: 20px; cursor: pointer; border: none; background: #ff4757; color: white; border-radius: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="ui">Score: <span id="score">0</span></div>
+    <button id="startBtn">JUGAR</button>
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const startBtn = document.getElementById('startBtn');
+
+canvas.width = 400;
+canvas.height = 600;
+
+let game = {
+    running: false,
+    score: 0,
+    speed: 5,
+    player: { x: 175, y: 500, w: 50, h: 80 },
+    enemies: [],
+    frame: 0
+};
+
+function drawCar(x, y, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, 50, 80);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(x+5, y+10, 40, 20); // Parabrisas
+}
+
+function update() {
+    if (!game.running) return;
+
+    game.frame++;
+    game.score++;
+    scoreEl.innerText = Math.floor(game.score / 10);
+    if(game.frame % 100 === 0) game.speed += 0.5;
+
+    // Enemigos
+    if (game.frame % 40 === 0) {
+        game.enemies.push({ x: Math.random() * (canvas.width - 50), y: -100 });
+    }
+
+    game.enemies.forEach((e, i) => {
+        e.y += game.speed;
+        if (e.y > canvas.height) game.enemies.splice(i, 1);
+        
+        // Colisión
+        if (e.x < game.player.x + game.player.w && e.x + 50 > game.player.x &&
+            e.y < game.player.y + game.player.h && e.y + 80 > game.player.y) {
+            game.running = false;
+            startBtn.style.display = 'block';
+        }
+    });
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Dibujar calle
+    ctx.fillStyle = "#444";
+    ctx.fillRect(50, 0, 300, 600);
+    ctx.strokeStyle = "#fff";
+    ctx.setLineDash([20, 20]);
+    ctx.beginPath(); ctx.moveTo(200, 0); ctx.lineTo(200, 600); ctx.stroke();
+    
+    drawCar(game.player.x, game.player.y, "#ff4757");
+    game.enemies.forEach(e => drawCar(e.x, e.y, "#2ed573"));
+    
+    requestAnimationFrame(update);
+}
+
+// Controles
+window.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    game.player.x = (e.clientX - rect.left) - 25;
+});
+
+window.addEventListener('touchmove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    game.player.x = (e.touches[0].clientX - rect.left) - 25;
+});
+
+startBtn.onclick = () => {
+    game.running = true;
+    game.score = 0;
+    game.enemies = [];
+    game.speed = 5;
+    startBtn.style.display = 'none';
+    update();
+};
+</script>
+</body>
+</html>
